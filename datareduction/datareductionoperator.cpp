@@ -2056,4 +2056,89 @@ namespace DRO {
       return true;
    }
 
+   /*! \brief Relative entropy
+    * Calculates for a population the relative entropy as defined in eq. (6) by Cassak et al. (2023) as
+    *    s_rel = -k_B * integral[f * log(f / f_M)]dv3 
+    * where
+    *    f: measured VDF for a population
+    *    f_M: a model 3D Maxwellian with the same number density, bulk velocity and temperature as the measured VDF
+    *    k_B: the Boltzmann constant
+    */
+
+   VariableRelativeEntropy::VariableRelativeEntropy(cuint _popID) : DataReductionOperator(), popID(_popID) {
+      popName = getObjectWrapper().particleSpecies[popID].name;
+   }
+   VariableRelativeEntropy::~VariableRelativeEntropy() {}
+
+   std::string VariableRelativeEntropy::getName() const { return popName + "/vg_relative_entropy"; }
+
+   bool VariableRelativeEntropy::getDataVectorInfo(std::string& dataType, unsigned int& dataSize,
+                                                    unsigned int& vectorSize) const {
+      dataType = "float";
+      dataSize = sizeof(Real);
+      vectorSize = 1;
+      return true;
+   }
+
+   bool VariableRelativeEntropy::reduceData(const SpatialCell* cell, char* buffer) {
+      // calculate something for s_rel here
+      const Real HALF = 0.5;
+
+      #ifdef USE_GPU
+      const vmesh::VelocityBlockContainer* VBC = cell->dev_get_velocity_blocks(popID);
+      #else
+      const vmesh::VelocityBlockContainer* VBC = cell->get_velocity_blocks(popID);
+      #endif
+
+      // ARCH interface includes OpenMP looping including critical regions for thread summation
+      {
+         Real relative_entropy_sum = 0.0;
+
+         const Real K_B = physicalconstants::K_B;
+         const Real mass = physicalconstants::MASS_PROTON;
+         const Real rho = cell->parameters[CellParams::RHOM] / mass;
+         const Real bulkVX = cell->parameters[CellParams::VX];
+         const Real bulkVY = cell->parameters[CellParams::VY];
+         const Real bulkVZ = cell->parameters[CellParams::VZ];
+         const Real PX = cell->parameters[CellParams::P_11];
+         const Real PY = cell->parameters[CellParams::P_22];
+         const Real PZ = cell->parameters[CellParams::P_33];
+         const Real T = (PX + PY + PZ) / (3.0 * rho * K_B);
+
+         if (cell->get_number_of_velocity_blocks(popID) != 0)
+         arch::parallel_reduce<arch::sum>({WID, WID, WID, (uint)cell->get_number_of_velocity_blocks(popID)},
+            ARCH_LOOP_LAMBDA(const uint i, const uint j, const uint k, const uint n, Real *lrelative_entropy_sum ){
+               const Realf *block_data = VBC->getData(n);
+               const Real *block_parameters = VBC->getParameters(n);
+               const Real VX = block_parameters[BlockParams::VXCRD] + (i + HALF)*block_parameters[BlockParams::DVX];
+               const Real VY = block_parameters[BlockParams::VYCRD] + (j + HALF)*block_parameters[BlockParams::DVY];
+               const Real VZ = block_parameters[BlockParams::VZCRD] + (k + HALF)*block_parameters[BlockParams::DVZ];
+               const Real DV3 = block_parameters[BlockParams::DVX]
+                  * block_parameters[BlockParams::DVY] * block_parameters[BlockParams::DVZ];
+
+               const Real maxwellian = rho * sqrt((mass * mass * mass) / (8.0 * M_PI * M_PI * M_PI * K_B * K_B * K_B * T * T * T)) *
+                                       exp(-1.0 * (mass * ((VX - bulkVX)*(VX - bulkVX) + (VY - bulkVY)*(VY - bulkVY) + (VZ - bulkVZ)*(VZ - bulkVZ))) / (2.0 * K_B * T));
+
+               if (block_data[cellIndex(i, j, k)] > 0) {
+                  lrelative_entropy_sum[0] +=
+                     block_data[cellIndex(i, j, k)] * log(block_data[cellIndex(i, j, k)] / maxwellian) * DV3;
+               }
+         }, relative_entropy_sum);
+
+         // "s_rel" is here the relative entropy
+         s_rel = -1.0 * K_B * relative_entropy_sum;
+      }
+
+      const char* ptr = reinterpret_cast<const char*>(&s_rel);
+      for (uint i = 0; i < sizeof(Real); ++i)
+         buffer[i] = ptr[i];
+      return true;
+   }
+
+   bool VariableRelativeEntropy::setSpatialCell(const SpatialCell* cell) {
+      s_rel = 0.0;
+
+      return true;
+   }
+
 } // namespace DRO
