@@ -564,6 +564,20 @@ void initializeDataReducers(DataReducer * outputReducer, DataReducer * diagnosti
             continue;
          }
       }
+
+      if (P::systemWriteAllDROs || lowercase == "populations_relative_entropy" || lowercase == "populations_vg_relative_entropy") {
+         // Relative entropy of a population distribution
+         for (unsigned int i = 0; i < getObjectWrapper().particleSpecies.size(); i++) {
+            species::Species& species = getObjectWrapper().particleSpecies[i];
+            const std::string& pop = species.name;
+            outputReducer->addOperator(new DRO::VariableRelativeEntropy(i));
+            outputReducer->addMetadata(outputReducer->size() - 1, "J/K", "$\\mathrm{J}\\,\\mathrm{K}^{-1}$",
+                                       "$s_{\\mathrm{"+pop+",rel}}$", "1.0");
+         }
+         if(!P::systemWriteAllDROs) {
+            continue;
+         }
+      }
       if(P::systemWriteAllDROs || lowercase == "maxfieldsdt" || lowercase == "fg_maxfieldsdt" || lowercase == "fg_maxdt_fieldsolver") {
          // Maximum timestep constraint as calculated by the fieldsolver
          outputReducer->addOperator(new DRO::DataReductionOperatorFsGrid("fg_maxdt_fieldsolver",[](
