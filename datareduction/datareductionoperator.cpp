@@ -2185,4 +2185,100 @@ namespace DRO {
       return true;
    }
 
+   /*! \brief Relative entropy
+    * Calculates for a population the relative entropy as defined in eq. (6) by Cassak et al. (2023) as
+    *    s_rel = -k_B * integral[f * log(f / f_M)]dv3 
+    * where
+    *    f: measured VDF for a population
+    *    f_M: a model 3D Maxwellian with the same number density, bulk velocity and temperature as the measured VDF
+    *    k_B: the Boltzmann constant
+    */
+
+   VariableRelativeEntropy::VariableRelativeEntropy(cuint _popID) : DataReductionOperator(), popID(_popID) {
+      popName = getObjectWrapper().particleSpecies[popID].name;
+   }
+   VariableRelativeEntropy::~VariableRelativeEntropy() {}
+
+   std::string VariableRelativeEntropy::getName() const { return popName + "/vg_relative_entropy"; }
+
+   bool VariableRelativeEntropy::getDataVectorInfo(std::string& dataType, unsigned int& dataSize,
+                                                    unsigned int& vectorSize) const {
+      dataType = "float";
+      dataSize = sizeof(Real);
+      vectorSize = 1;
+      return true;
+   }
+
+   bool VariableRelativeEntropy::reduceData(const SpatialCell* cell, char* buffer) {
+      // calculate something for epsilon here
+      const Real HALF = 0.5;
+
+#pragma omp parallel
+      {
+         Real relative_entropy_sum = 0.0;
+
+         const Real* parameters = cell->get_block_parameters(popID);
+         const Realf* block_data = cell->get_data(popID);
+
+#pragma omp for
+         for (vmesh::LocalID n = 0; n < cell->get_number_of_velocity_blocks(popID); n++) {
+            for (uint k = 0; k < WID; ++k)
+               for (uint j = 0; j < WID; ++j)
+            for (uint i = 0; i < WID; ++i) {
+          const Real VX = parameters[n * BlockParams::N_VELOCITY_BLOCK_PARAMS + BlockParams::VXCRD] +
+                          (i + HALF) * parameters[n * BlockParams::N_VELOCITY_BLOCK_PARAMS + BlockParams::DVX];
+          const Real VY = parameters[n * BlockParams::N_VELOCITY_BLOCK_PARAMS + BlockParams::VYCRD] +
+                          (j + HALF) * parameters[n * BlockParams::N_VELOCITY_BLOCK_PARAMS + BlockParams::DVY];
+          const Real VZ = parameters[n * BlockParams::N_VELOCITY_BLOCK_PARAMS + BlockParams::VZCRD] +
+                          (k + HALF) * parameters[n * BlockParams::N_VELOCITY_BLOCK_PARAMS + BlockParams::DVZ];
+          const Real DV3 = parameters[n * BlockParams::N_VELOCITY_BLOCK_PARAMS + BlockParams::DVX] *
+                           parameters[n * BlockParams::N_VELOCITY_BLOCK_PARAMS + BlockParams::DVY] *
+                           parameters[n * BlockParams::N_VELOCITY_BLOCK_PARAMS + BlockParams::DVZ];
+
+          const Real maxwellian = rho * sqrt((mass * mass * mass) / (8.0 * M_PI * M_PI * M_PI * physicalconstants::K_B * physicalconstants::K_B * physicalconstants::K_B * T * T * T))
+                                    * exp(-1.0 * (mass * ((VX - V0x)*(VX - V0x) + (VY - V0y)*(VY - V0y) + (VZ - V0z)*(VZ - V0z))) / (2.0 * physicalconstants::K_B * T));
+            
+          if (block_data[n * SIZE_VELBLOCK + cellIndex(i, j, k)] > 0) {
+            relative_entropy_sum +=
+               block_data[n * SIZE_VELBLOCK + cellIndex(i, j, k)] * log(block_data[n * SIZE_VELBLOCK + cellIndex(i, j, k)] / maxwellian) * DV3;
+               }
+            }
+         }
+
+   // Accumulate contributions coming from this velocity block to the
+   // spatial cell velocity moments. If multithreading / OpenMP is used,
+   // these updates need to be atomic:
+#pragma omp critical
+         { relative_entropy += relative_entropy_sum; }
+      }
+
+      relative_entropy *= -1.0 * physicalconstants::K_B;
+
+      const char* ptr = reinterpret_cast<const char*>(&relative_entropy);
+      for (uint i = 0; i < sizeof(Real); ++i)
+         buffer[i] = ptr[i];
+      return true;
+   }
+
+   bool VariableRelativeEntropy::setSpatialCell(const SpatialCell* cell) {
+      // calculate here rho, v, T and m
+      relative_entropy = 0.0;
+
+      // get density, bulk speed components and mass
+      rho = cell->get_population(popID).RHO;
+      V0x = cell->get_population(popID).V[0];
+      V0y = cell->get_population(popID).V[1];
+      V0z = cell->get_population(popID).V[2];
+      mass = getObjectWrapper().particleSpecies[popID].mass;
+
+      // calculate temperature from pressure tensor diagonal elements
+      Real P11 = cell->parameters[CellParams::P_11];
+      Real P22 = cell->parameters[CellParams::P_22];
+      Real P33 = cell->parameters[CellParams::P_33];
+
+      T = (P11 + P22 + P33) / (3.0 * rho * physicalconstants::K_B);
+
+      return true;
+   }
+
 } // namespace DRO
