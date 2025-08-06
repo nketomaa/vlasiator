@@ -676,6 +676,29 @@ namespace DRO {
       std::string popName;
    };
 
+   // Relative entropy of a population distribution
+   class VariableRelativeEntropy : public DataReductionOperator {
+   public:
+      VariableRelativeEntropy(cuint popID);
+      virtual ~VariableRelativeEntropy();
+
+      virtual bool getDataVectorInfo(std::string& dataType, unsigned int& dataSize, unsigned int& vectorSize) const;
+      virtual std::string getName() const;
+      virtual bool reduceData(const SpatialCell* cell, char* buffer);
+      virtual bool setSpatialCell(const SpatialCell* cell);
+
+   protected:
+      Real rho;
+      Real V0x;
+      Real V0y;
+      Real V0z;
+      Real T;
+      Real mass;
+      Real relative_entropy;
+      uint popID;
+      std::string popName;
+   };
+
 } // namespace DRO
 
 #endif
