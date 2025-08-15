@@ -189,7 +189,7 @@ void Harris::setProjectBField(FsGrid<std::array<Real, fsgrids::bfield::N_BFIELD>
                                                          cos(2 * M_PI * (x[0] + 0.5 * perBGrid.DX) / Lx) *
                                                          sin(M_PI * (x[2] + 0.5 * perBGrid.DZ) / Lz);
                   cell->at(fsgrids::bfield::PERBY) = 0.0;
-                  cell->at(fsgrids::bfield::PERBZ) = Psi0 * (-2 * M_PI / Lx) *
+                  cell->at(fsgrids::bfield::PERBZ) = Psi0 * (2 * M_PI / Lx) *
                                                      sin(2 * M_PI * (x[0] + 0.5 * perBGrid.DX) / Lx) *
                                                      cos(M_PI * (x[2] + 0.5 * perBGrid.DZ) / Lz);
                }
